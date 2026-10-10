@@ -9,6 +9,7 @@ from pathlib import Path
 GODOT='ed1daf0bf001b61586d9930840f2f1394092c079'
 LLVM='5e96669f06077099aa41290cdb4c5e6fa0f59349'
 ANDROID_BUILD='19756bd1d4ffca122636e553ab43b4befe827183'
+ENGINE_BUILD_REFERENCE='b3289deb5d8750c06f792dc197d068829445e10b'
 NDK='29.0.14206865'
 FLAGS='-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384'
 SWAPPY_SHA='2dd05484de29a3040106658d6f95915778fd71abc3261130eada6090ed1c153d'
@@ -85,8 +86,11 @@ class Build:
             'expected_source_sha':LLVM,'compiler_version':compiler_version,
             'source_info_sha256':digest(source_info),'source_sha_in_source_info':LLVM in info},indent=2))
         llvm=self.source('llvm','https://android.googlesource.com/toolchain/llvm-project',LLVM,
-                         ['libcxx','libcxxabi','libunwind','runtimes','cmake','llvm','third-party'])
-        for component in ['libcxx','libcxxabi','libunwind']:
+                         ['libc','libcxx','libcxxabi','libunwind','runtimes','cmake','llvm','third-party'])
+        # libc++ charconv uses LLVM libc common-utility headers. These are source
+        # dependencies only; LLVM_ENABLE_RUNTIMES does not replace Android libc.
+        assert (llvm/'libc/shared/fp_bits.h').is_file(), 'Pinned libc++ shared header dependency missing'
+        for component in ['libc','libcxx','libcxxabi','libunwind']:
             self.notices(llvm/component,component)
         # Public installed NDK compiler/sysroot; preserve Android DeviceLibcxxBuilder
         # ABI options without bootstrapping the entire compiler toolchain.
@@ -154,7 +158,7 @@ class Build:
         os.environ['ANDROID_HOME']=str(sdk)
         options=['platform=android','target=template_release',f'arch={self.a.arch}',
                  'ndk_platform=android-24','production=yes','dev_build=no','optimize=speed',
-                 'debug_symbols=no','lto=none','swappy=yes','opengl3=yes','vulkan=yes',
+                 'debug_symbols=no','lto=auto','swappy=yes','opengl3=yes','vulkan=yes',
                  'module_jolt_physics_enabled=yes',f'linkflags={FLAGS}']
         self.run(['scons',f'-j{self.a.jobs}','verbose=yes',*options],godot)
         libs=godot/'platform/android/java/lib/libs/release'/abi
@@ -167,8 +171,12 @@ class Build:
         receipt={'candidate_only':True,'godot_source':GODOT,'llvm_source':LLVM,
                  'android_build_reference':ANDROID_BUILD,'ndk':NDK,'abi':abi,
                  'runtime_api':21,'engine_api':24,'page_link_flags':FLAGS,
+                 'official_engine_build_reference':ENGINE_BUILD_REFERENCE,
+                 'engine_optimization':'speed (-O3), matching upstream template_release default',
+                 'engine_lto':'auto; pinned Android detect.py resolves auto to none, matching upstream production default',
                  'engine_options':options,'swappy_archive_sha256':SWAPPY_SHA,'swappy_sha256':digest(swappy),'native':results,
-                 'commands':self.commands,'runtime_16kb_verified':False,'game_exported':False}
+                 'commands':self.commands,'runtime_16kb_verified':False,'game_exported':False,
+                 'native_performance_verified':False,'gameplay_physics_renderer_quality_verified':False}
         (self.out/'native-build-receipt.json').write_text(json.dumps(receipt,indent=2))
 
 def main():
