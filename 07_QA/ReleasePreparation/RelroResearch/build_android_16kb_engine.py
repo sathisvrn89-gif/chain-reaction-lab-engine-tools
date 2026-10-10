@@ -70,11 +70,20 @@ class Build:
         if not tools.is_dir(): raise RuntimeError('Install the exact pinned NDK first')
         properties=(ndk/'source.properties').read_text(); assert NDK in properties
         self.run([tools/'clang','--version'])
+        compiler_version=subprocess.check_output([tools/'clang','--version'],text=True)
+        if LLVM not in compiler_version:
+            raise RuntimeError('Actual NDK compiler source SHA differs from inspected release templates')
+        self.run([tools/'ld.lld','--version'])
         source_info=tools.parent/'clang_source_info.md'
         if not source_info.is_file(): raise RuntimeError('Missing NDK compiler provenance')
         info=source_info.read_text()
-        if LLVM not in info: raise RuntimeError('NDK LLVM provenance differs from inspected release templates')
         shutil.copy2(source_info,self.out/'clang_source_info.md')
+        # Keep auxiliary source-info verbatim. Its omission of the final source
+        # SHA does not prove a compiler mismatch: the running compiler's own
+        # --version must identify the pinned patched source SHA.
+        (self.out/'compiler-provenance.json').write_text(json.dumps({
+            'expected_source_sha':LLVM,'compiler_version':compiler_version,
+            'source_info_sha256':digest(source_info),'source_sha_in_source_info':LLVM in info},indent=2))
         llvm=self.source('llvm','https://android.googlesource.com/toolchain/llvm-project',LLVM,
                          ['libcxx','libcxxabi','libunwind','runtimes','cmake','llvm','third-party'])
         for component in ['libcxx','libcxxabi','libunwind']:

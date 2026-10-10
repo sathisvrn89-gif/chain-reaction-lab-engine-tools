@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
   engine:
     # Standard public-repository runner only; no game repository or credentials.
@@ -106,6 +109,7 @@ jobs:
           for p in root.rglob('*') if p.is_file()}
           receipt={'job_status_before_archive':os.environ['BUILD_STATUS'],
           'candidate_only':True,'runtime_16kb_verified':False,'game_exported':False,
+          'complete_template_receipt_present':(root/'template/template-build-receipt.json').is_file(),
           'files_sha256':files}
           (root/'archive-receipt.json').write_text(json.dumps(receipt,indent=2))
           PY
