@@ -1,0 +1,119 @@
+name: Public engine-only strict16KB candidate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  engine:
+    # Standard public-repository runner only; no game repository or credentials.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+    env:
+      OUTPUT_DIR: engine16kb-output
+    steps:
+      - uses: actions/checkout@v4
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+      - name: Require the allowlisted public tools repository
+        id: scope
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "sathisvrn89-gif/chain-reaction-lab-engine-tools"
+          test "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" = "false"
+          mkdir -p "$OUTPUT_DIR"
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          allowed={'.github/workflows/android-16kb-engine.yml',
+          '07_QA/ReleasePreparation/RelroResearch/build_android_16kb_engine.py',
+          '07_QA/ReleasePreparation/RelroResearch/package_android_16kb_engine.py',
+          '07_QA/ReleasePreparation/RelroResearch/inspect_relro_layout.py'}
+          tracked=set(subprocess.check_output(['git','ls-files'],text=True).splitlines())
+          assert tracked==allowed, 'Tools repo must contain exactly the four reviewed files'
+          info={k:os.environ[k] for k in ['GITHUB_REPOSITORY','GITHUB_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT']}
+          info.update(candidate_only=True, game_source_included=False)
+          Path(os.environ['OUTPUT_DIR'],'run-provenance.json').write_text(json.dumps(info,indent=2))
+          PY
+      - uses: actions/setup-java@v4
+        timeout-minutes: 3
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        timeout-minutes: 5
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Install pinned official native tools
+        timeout-minutes: 15
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          {
+            sudo apt-get update -qq
+            sudo apt-get install -y cmake ninja-build scons
+            sdkmanager "ndk;29.0.14206865" "platforms;android-36" "build-tools;36.1.0"
+            df -h "$RUNNER_TEMP"
+            free -h
+          } 2>&1 | tee "$OUTPUT_DIR/tool-setup.log"
+      - name: Build ARM64 then x86_64 with two compiler jobs
+        timeout-minutes: 300
+        run: |
+          for arch in arm64 x86_64; do
+            python3 07_QA/ReleasePreparation/RelroResearch/build_android_16kb_engine.py \
+              --arch "$arch" --sdk "$ANDROID_HOME" \
+              --work "$RUNNER_TEMP/godot16kb-$arch" \
+              --output "$GITHUB_WORKSPACE/$OUTPUT_DIR/native-inputs/engine16kb-$arch" \
+              --jobs 2 2>&1 | tee "$OUTPUT_DIR/$arch-driver.log"
+            # Only delete this job's disposable engine build after all native
+            # output bytes, logs, source receipts and notices have been saved.
+            python3 - "$RUNNER_TEMP" "$arch" <<'PY'
+          import shutil, sys
+          from pathlib import Path
+          root=Path(sys.argv[1]).resolve()
+          path=(root/('godot16kb-'+sys.argv[2])).resolve()
+          assert path.is_relative_to(root) and path!=root
+          shutil.rmtree(path)
+          PY
+          done
+      - name: Assemble both-ABI official release template
+        timeout-minutes: 20
+        run: |
+          python3 07_QA/ReleasePreparation/RelroResearch/package_android_16kb_engine.py \
+            --inputs "$OUTPUT_DIR/native-inputs" \
+            --work "$RUNNER_TEMP/godot16kb-template" \
+            --sdk "$ANDROID_HOME" \
+            --output "$OUTPUT_DIR/template" 2>&1 | tee "$OUTPUT_DIR/template-driver.log"
+      - name: Save candidate outputs or failure diagnostics in a draft release
+        if: always() && steps.scope.outcome == 'success'
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_STATUS: ${{ job.status }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "sathisvrn89-gif/chain-reaction-lab-engine-tools"
+          test "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" = "false"
+          mkdir -p "$OUTPUT_DIR"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root=Path(os.environ['OUTPUT_DIR'])
+          files={str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest()
+          for p in root.rglob('*') if p.is_file()}
+          receipt={'job_status_before_archive':os.environ['BUILD_STATUS'],
+          'candidate_only':True,'runtime_16kb_verified':False,'game_exported':False,
+          'files_sha256':files}
+          (root/'archive-receipt.json').write_text(json.dumps(receipt,indent=2))
+          PY
+          archive="engine16kb-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz"
+          tar -czf "$archive" "$OUTPUT_DIR"
+          sha256sum "$archive" > "$archive.sha256"
+          tag="engine16kb-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --draft --title "Godot4.7.2 strict16KB candidate - $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" \
+            --notes "Engine-only candidate or failure diagnostics. Build status: $BUILD_STATUS. ARM64/x86_64 full Godot and rebuilt C++ runtime. Includes official source notices. No game export, production signing or runtime approval. Remains draft for review."
+          gh release upload "$tag" "$archive" "$archive.sha256" --repo "$GITHUB_REPOSITORY"
