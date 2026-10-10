@@ -94,13 +94,15 @@ class Build:
             self.notices(llvm/component,component)
         # Public installed NDK compiler/sysroot; preserve Android DeviceLibcxxBuilder
         # ABI options without bootstrapping the entire compiler toolchain.
-        # Linux system avoids CMake's independent NDK detection; ANDROID activates
-        # libc++ Android configuration. Targets and sysroot remain explicit Android.
+        # Match Android's upstream CMake platform settings. System version1
+        # bypasses independent NDK detection while the Android platform retains
+        # its unversioned SONAME convention and runtime-link behavior.
         cflags='-ffunction-sections -fdata-sections -D__BIONIC_NO_PAGE_SIZE_MACRO -flto=thin -ffat-lto-objects'
         ldflags=f'-nostdlib++ -rtlib=compiler-rt -unwindlib=libunwind -flto=thin -Wl,-z,defs -Wl,--gc-sections -Wl,--build-id=sha1 {FLAGS}'
         build=self.work/'runtime-build'
         opts={
-            'CMAKE_SYSTEM_NAME':'Linux','ANDROID':'1','ANDROID_NATIVE_API_LEVEL':'21',
+            'CMAKE_SYSTEM_NAME':'Android','CMAKE_SYSTEM_VERSION':'1',
+            'ANDROID':'1','ANDROID_NATIVE_API_LEVEL':'21',
             'CMAKE_SYSTEM_PROCESSOR':processor,'CMAKE_BUILD_TYPE':'RelWithDebInfo',
             'CMAKE_C_COMPILER':tools/'clang','CMAKE_CXX_COMPILER':tools/'clang++',
             'CMAKE_C_COMPILER_TARGET':triple+'21','CMAKE_CXX_COMPILER_TARGET':triple+'21',
@@ -124,6 +126,8 @@ class Build:
         candidates=list(build.rglob('libc++_shared.so'))
         assert len(candidates)==1, f'Ambiguous runtime outputs: {candidates}'
         runtime=candidates[0]; baseline=sysroot/'usr/lib'/triple/'libc++_shared.so'
+        runtime_validation=self.inspect(runtime,tools)
+        (self.out/'rebuilt-runtime-validation.json').write_text(json.dumps(runtime_validation,indent=2))
         def symbols(p):
             text=subprocess.check_output([tools/'llvm-readelf','--dyn-syms','--wide',p],text=True)
             return {line.split()[7].split('@')[0] for line in text.splitlines()
