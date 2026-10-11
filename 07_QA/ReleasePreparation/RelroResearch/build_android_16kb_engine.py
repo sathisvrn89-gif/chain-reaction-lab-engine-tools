@@ -97,7 +97,12 @@ class Build:
         # Match Android's upstream CMake platform settings. System version1
         # bypasses independent NDK detection while the Android platform retains
         # its unversioned SONAME convention and runtime-link behavior.
-        cflags='-ffunction-sections -fdata-sections -D__BIONIC_NO_PAGE_SIZE_MACRO -flto=thin -ffat-lto-objects'
+        # Match DeviceLibcxxBuilder's profiling/discriminator settings too.
+        # Omitting them removes __llvm_fs_discriminator__ from the public
+        # runtime exports. Keep the original-export subset check unchanged.
+        cflags=('-ffunction-sections -fdata-sections -D__BIONIC_NO_PAGE_SIZE_MACRO '
+                '-fdebug-info-for-profiling -mllvm -enable-fs-discriminator=true '
+                '-mllvm -improved-fs-discriminator=true -flto=thin -ffat-lto-objects')
         ldflags=f'-nostdlib++ -rtlib=compiler-rt -unwindlib=libunwind -flto=thin -Wl,-z,defs -Wl,--gc-sections -Wl,--build-id=sha1 {FLAGS}'
         build=self.work/'runtime-build'
         opts={
