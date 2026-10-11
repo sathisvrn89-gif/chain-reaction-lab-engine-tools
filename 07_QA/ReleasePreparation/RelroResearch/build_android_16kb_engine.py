@@ -141,7 +141,10 @@ class Build:
         (self.out/'runtime-export-comparison.json').write_text(json.dumps({'missing_original_exports':missing},indent=2))
         assert not missing, 'Rebuilt libc++ removed original exports; candidate rejected'
         shutil.copy2(baseline,self.out/'original-libc++_shared.so')
-        shutil.copy2(runtime,baseline) # only this job's disposable NDK
+        # Hosted NDK files can be writable but owned by root. Copy bytes only:
+        # preserving their timestamp requires ownership and is not an ABI need.
+        shutil.copyfile(runtime,baseline) # only this job's disposable NDK
+        assert digest(runtime)==digest(baseline), 'Disposable NDK runtime copy differs'
         runtime_sha=digest(baseline)
         for name in ['CMakeCache.txt','build.ninja']:
             shutil.copy2(build/name,self.out/('runtime-'+name))
